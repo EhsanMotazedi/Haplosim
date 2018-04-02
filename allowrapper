@@ -1,0 +1,330 @@
+#!/bin/bash
+# Wrapper to combine several haplogenerator outputs to generate a hybrid genome.
+# Written by Ehsan Motazedi, Wageningen UR, 22-01-2016.
+# Last modified: 06-09-2017.
+usage(){
+	echo 'Usage:  allowrapper [-h, --help] -p, --ploidy int+ <ploidy level>  -f, --ref <name of the reference in fasta format> infiles... <root name of subgenome files> outputfile <root name for output files>' 
+} 
+display_help(){
+echo 'Wrapper to allow simulation of allopolyploid genomes and haplotypes from haplogenerator output for the subgenomes. For example, with ploidy equal to "p", haplogenerator.py'
+echo 'should have been run "p/2" times to produce the diploid subgenomes. Polyploid subgenomes are also possible. Calling  this wrapper  combines the haplotypes and'
+echo 'renames the subgenome fasta files to produce the same output as if from a single run of haplogenerator. The "root names" must be given for the input and output files'
+echo 'and the ploidy of the allopolyploid must be specified in the input. With this method, different models might be considered for each subgenome. Note that the sum'
+echo 'of the ploidy levels of the subgenomes must be equal to the speified ploidy level of the allopolyploid. The new variant haplotype file will'
+echo 'code the alleles by 0, 1, 2, ... with zero being the nucleotide present in the given reference.'
+echo
+usage
+echo 
+echo 'where:'
+echo '    infiles...          the root names of the ancesteral subgenomes produced by haplogenerator'
+echo '    output              the root name for the files of the allopolyploid genome'
+echo '    -h, --help          show this help text'
+echo '    -f, --ref           the full name of the fasta file containing the common reference sequence for all of the subgenomes.'
+echo '    -p, --ploidy  int+  the ploidy level of the allopolyploid genome'
+}    
+
+contains() {
+	string="$1"
+	substring="$2"
+	if test "${string#*$substring}" != "$string"; then
+		return 0    # $substring is in $string
+	else
+		return 1    # $substring is not in $string
+	fi
+}
+
+if [ "$1" = "" ]; then
+	>&2 echo 'ERROR: no input has been given!'
+	1>&2 usage
+	exit 1
+else   
+	declare -a FILES #FILES=() 
+	while [ "$1" != "" ]; do
+	if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+		display_help
+		exit 0
+	elif [ "$1" = "-p" ] || [ "$1" = "--ploidy" ]; then
+		shift
+		ploidy=$1
+		if [ -z $ploidy ]; then
+			printf "ERROR: you must specify a ploidy level!\n" 1>&2
+			1>&2 usage
+			exit 1
+		fi
+		test $ploidy -eq $ploidy 2> /dev/null
+		if [ $? != 0 ]; then
+			printf "ERROR: invalid argument %s passed to -p, --ploidy.\n" $1 1>&2
+			1>&2 usage
+			exit 1
+		fi
+		shift
+	elif [ "$1" = "-f" ] || [ "$1" = "--ref" ]; then
+		shift
+		fastafile=$1
+		if [ ! -f $fastafile ]; then
+			printf "ERROR: the given reference %s does not exist!\n" $fastafile 1>&2
+			1>&2 usage
+			exit 1
+		fi
+		shift
+	else
+		echo $1 | grep -q "^-"
+		if [ $? = 0 ]; then 
+			printf "ERROR: argument %s is not valid!\n" $1 1>&2
+			1>&2 usage
+			exit 1
+		fi
+		FILES+=("$1") 
+		shift
+	fi
+	done
+fi
+
+if [ "$(expr "$ploidy" : '^[0-9]\+$')" = "0" ] || [ "$ploidy" = "0" ]; then
+	>&2 echo 'ERROR: invalid ploidy level specified. Ploidy must be a positive integer!'
+	1>&2 usage
+	exit 1
+fi
+#if [ -z ${fastafile+x} ];then # This will NOT report $fastafile="" as unset, while the next line DOES report $fastafile="" as unset
+if [ -z $fastafile ];then
+	>&2 echo 'ERROR: no common reference has been given!'
+	1>&2 usage
+	exit 1
+fi
+
+declare -i nargs=${#FILES[@]} 
+
+if [ $nargs -eq 0 ]; then
+	>&2 echo 'ERROR: no subgenome has been given!'
+	1>&2 usage
+	exit 1
+elif [ $nargs -lt 2 ]; then  
+	>&2 echo 'ERROR: no output name has been specified !'
+	1>&2 usage
+	exit 1
+else
+	outname=${FILES[-1]}
+	unset FILES[${#FILES[@]}-1]
+fi
+
+declare -i nhapsfatsa=0
+declare -i nhapsindx=0
+
+for name in ${FILES[*]}; do
+	if contains "$name" "/"; then
+		DIR="${name%/*}"
+	else
+		DIR=$(pwd)
+	fi
+	BASE="${name##*/}"
+	if [ ! -d "$DIR" ]; then
+		>&2 echo 'ERROR: the given directory does not exist for subgenome '$name\!
+		exit 1
+	fi
+	if ! [ -f "$name"_varianthaplos.txt ]; then
+		>&2 echo 'ERROR: haplotype file missing for subgenome '$name\!
+		exit 1
+	fi
+	nhapsfasta=$((nhapsfasta+$(ls "$DIR"/ |grep $BASE'_hap[0-9]*\.fa$' | wc -l)))
+	nhapsindx=$((nhapsindx+$(ls "$DIR"/ |grep $BASE'_hap[0-9]*\.fa\.fai$' | wc -l)))
+done
+if [ $nhapsfasta -ne $ploidy ]; then
+	>&2 echo 'ERROR: Subgenome fasta files not equal to the specified ploidy'\!
+	exit 1
+fi
+if [ $nhapsindx -ne $ploidy ]; then
+	>&2 echo 'ERROR: Subgenome fasta index files not equal to the specified ploidy'\!
+	exit 1
+fi
+
+hapfile=$(mktemp)
+declare -i lefthapnum=1
+declare -i subploidy=1
+for name in ${FILES[*]}; do #Concatenate the haplotype files after removing the header line of each block
+	subploidy=$(head -n1 "$name"_varianthaplos.txt|tr '\t' '\n'|grep 'hap_[0-9]\{1,\}'|wc -l)
+	awk -v var=${lefthapnum} '{print $0"\t"var}' "$name"_varianthaplos.txt|sed '/var_id\tcontig\tvarpos\tref_allele\talt_allele/d' >> $hapfile
+	lefthapnum=$((lefthapnum+subploidy))
+done
+export size=$(wc -l $hapfile | awk '{print $1}') 
+export ploidy
+export hapfile
+export fastafile
+# Start python section here
+python << END_OF_PYTHON   
+import collections
+import os
+import sys
+import traceback
+from Bio import SeqIO
+from haplogenerator import RemoveDuplicate
+from operator import attrgetter
+
+class Haplorecord(object):
+	"""Class of haplotype records extracted from the _varianthaplos.txt output of HaploGenerator"""
+	def __init__(self, record=None):
+		if record is None:
+			record = [None]*6
+		self.contig = record[0]
+		self.varpos = int(record[1]) if record[1] is not None else None
+		self.ref_allele = record[2]
+		self.alt_allele = record[3]
+		self.hapalleles = tuple((int(x) if x is not None else None) for x in record[4:-1])
+		self.lefthapnum = int(record[-1]) if record[-1] is not None else None
+
+	def __eq__(self, othr):
+		return  (isinstance(othr, Haplorecord) and (self.contig, self.varpos) == (othr.contig, othr.varpos))
+	
+	def __ne__(self, othr):
+		return not self.__eq__(othr)	
+	
+	def __lt__(self, othr):
+		if (self.contig < othr.contig) or ((self.contig == othr.contig) and (self.varpos < othr.varpos)):
+			return True
+		else:
+			return False
+			
+	def __gt__(self, othr):
+		if (self.contig > othr.contig) or ((self.contig == othr.contig) and (self.varpos > othr.varpos)):
+			return True
+		else:
+			return False
+	
+	def __hash__(self):
+		return (hash(self.contig, self.varpos))
+	
+	def correct_ploidy(self, ploidy):
+		"""Increase the ploidy level of the record by adding zero alleles"""
+		assert len(self.hapalleles)<=ploidy, "The desired ploidy must be equal or larger than the current ploidy!"
+		new_hapalleles = list(0 for x in range(0,ploidy)) 
+		for x in range(self.lefthapnum, self.lefthapnum+len(self.hapalleles)):
+			new_hapalleles[x-1]=self.hapalleles[x-self.lefthapnum]
+		self.hapalleles=tuple(new_hapalleles)
+
+	def __repr__(self):
+		return(str('{0}\t{1}\t{2}\t{3}\t{4}\t{5}'.format(self.contig, 
+			self.varpos, self.ref_allele, 
+			self.alt_allele, '\t'.join(str(x) for x in self.hapalleles), self.lefthapnum).split('\t')))
+
+	def __str__(self):
+		return("{0}\t{1}\t{2}\t{3}\t".format(self.contig, 
+			self.varpos, self.ref_allele, self.alt_allele)+'\t'.join(str(x) for x in self.hapalleles))  
+	
+	@staticmethod
+	def update(rec1, rec2, reference):
+		"""Update the alternative and reference alleles of two haplotype records, making their reference nucleotide the same as 
+		in the given reference fasta file, and their alternatvie alleles the pool of all other alleles. The alleles numeric coding
+		will also be updated."""
+		assert isinstance(rec1, Haplorecord) and isinstance(rec2, Haplorecord), "arguments must be instances of Haplorecord class!"
+		assert rec1 == rec2, "the two haplorecords have not the same contig and genomic positions!"
+		_seq = None
+		with open(reference, 'rU') as handle:
+			for record in SeqIO.parse(handle, "fasta"):
+				_id=record.__getattribute__('id')
+				if _id==rec1.contig:
+					_seq=record.__getattribute__('seq')
+					break
+		if _seq is None:
+			raise RuntimeError("Contig '{0:s}' was not found in the given reference!".format(rec1.contig))
+		ref_nucleotide=str(_seq[rec1.varpos-1])
+		__alleles=(rec2.ref_allele+','+rec2.alt_allele).split(',') # This concatinate and split is necessary as alt_allels could be more than one, e.g. 'A,C'
+		__alleledict={x:y for (x,y) in zip(range(len(__alleles)), __alleles)}
+		rec2.hapalleles = tuple(__alleledict[x] for x in rec2.hapalleles) # Convert 0,1,2,... to actual nucleotides for rec2
+		__alleles=(rec1.ref_allele+','+rec1.alt_allele).split(',')
+		__alleledict={x:y for (x,y) in zip(range(len(__alleles)), __alleles)}
+		rec1.hapalleles = tuple(__alleledict[x] for x in rec1.hapalleles) # Convert 0,1,2,... to actual nucleotides for rec1
+		alt_alleles = set((rec1.ref_allele+','+rec1.alt_allele+','+rec2.ref_allele+','+rec2.alt_allele).split(','))
+		alt_alleles = ','.join(x for x in set.difference(alt_alleles, set(ref_nucleotide)))
+		__alleles=(ref_nucleotide+','+alt_alleles).split(',')
+		__alleledict={y:x for (x,y) in zip(range(len(__alleles)), __alleles)} 	# The updated numerical dictionary for the variants
+		rec1.hapalleles = tuple(__alleledict[x] for x in rec1.hapalleles) 		# Convert the nucleotide to 0,1,2,... for rec1
+		rec2.hapalleles = tuple(__alleledict[x] for x in rec2.hapalleles)	 	# Convert the nucleotide to 0,1,2,... for other
+		rec1.ref_allele =  ref_nucleotide 	# update the reference allele of both records to the same allele
+		rec2.ref_allele =  ref_nucleotide
+		rec1.alt_allele =  alt_alleles # update the alternative allele(s) for both records to be the same 
+		rec2.alt_allele =  alt_alleles
+
+def merge(rec1, rec2):
+	""" Merge the ploidy corrected haplotype alleles of rec2 and rec1, assuming rec1==rec2 as well as same reference and alternative alleles"""
+	assert isinstance(rec1, Haplorecord) and isinstance(rec2, Haplorecord) # arguments must be instances of Haplorecord class!
+	assert rec1 == rec2 and rec2.alt_allele == rec1.alt_allele and rec1.ref_allele == rec2.ref_allele # the two haplorecords have not the same contig, genomic positions, reference and alternative alleles!"
+	new_rec = Haplorecord(eval(repr(rec1)))
+	new_rec.hapalleles = tuple(x if x!=0 else y for x, y in zip(rec1.hapalleles, rec2.hapalleles))
+	new_rec.lefthapnum = min(rec1.lefthapnum, rec2.lefthapnum)
+	return(new_rec)
+
+def mergeSubGenomes(Hapreclst, ploidy, reference):	  
+	"""Merge duplicates from a sorted list of haplotype records"""
+	_Newlist = collections.deque()
+	prev = Haplorecord()
+	if not Hapreclst:
+		return(_Newlist)
+	else:
+		iterable=(x for x in Hapreclst)
+		for element in iterable: 
+			element.correct_ploidy(ploidy)
+			if (element != prev):
+				_Newlist.append(Haplorecord(eval(repr(element))))
+				prev = Haplorecord(eval(repr(element)))
+			else:
+				dummy = Haplorecord(eval(repr(element)))
+				Haplorecord.update(dummy, prev, reference)
+				prev = merge(dummy, prev)
+				dummy = _Newlist.pop()
+				_Newlist.append(prev)
+	return(_Newlist)
+
+hapfile = os.getenv("hapfile")
+reference = os.getenv("fastafile")
+size = int(os.getenv("size"))
+ploidy = int(os.getenv("ploidy"))
+haprecords = [Haplorecord() for _variant in range(size)]
+with open(hapfile, 'rU') as handle:
+	for n, line in enumerate(handle):
+		columns = line.split()[1:]
+		haprecords[n] = Haplorecord(columns)
+haprecords.sort()
+haprecords = mergeSubGenomes(haprecords, ploidy, reference)        
+contiglst = map(attrgetter('contig'), haprecords)
+contignames = collections.deque()
+for x in RemoveDuplicate(contiglst):
+	contignames.append(x)
+contigcounts = collections.deque()
+for x in contignames:
+	contigcounts.append(contiglst.count(x))
+var_id = 1
+change = True
+current_rec = Haplorecord()
+with open(hapfile, 'w') as handle:
+	while contignames:
+		currentname = contignames.popleft()
+		handle.write("Block length  {0}\tvar_id\tcontig\tvarpos\tref_allele\talt_allele\t".format(contigcounts.popleft())+
+			"\t".join("hap_"+str(x) for x in range(1,ploidy+1))+'\n')	
+		while (haprecords or (not change)):
+			if change:
+				current_rec = haprecords.popleft()
+				if current_rec.contig == currentname:
+					handle.write(str(var_id)+"\t"+str(current_rec)+"\n")
+					var_id+=1
+				else:
+					change = False
+					break
+			else:
+				handle.write(str(var_id)+"\t"+str(current_rec)+"\n")
+				var_id+=1
+				change = True
+END_OF_PYTHON
+if [[ $? -ne 0 ]] ; then
+    touch $hapfile
+    rm $hapfile
+    exit 1
+fi
+# End of the python section
+mv $hapfile "$outname"_varianthaplos.txt
+declare -i hapnum=0
+for name in ${FILES[*]}; do
+	for file in $(ls "$name"_hap[0-9]*.fa); do
+	hapnum=$((hapnum+1))
+	cp $file "$outname"_hap"${hapnum}".fa
+	cp "$file".fai "$outname"_hap"${hapnum}".fa.fai
+	done
+done
