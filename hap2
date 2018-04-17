@@ -95,6 +95,7 @@ else # Use the diploid version of SDhaP if ploidy level is 2
     if [ -z "$SDhaPPath" ]; then
         hap $FRAG $OUTPUT $PLOIDY & pid_hap=$!
     else
+	SDhaPPath=${SDhaPPath%\/}
         "${SDhaPPath%\/SDhaP_poly}/hap" $FRAG $OUTPUT $PLOIDY & pid_hap=$!
     fi
 fi
