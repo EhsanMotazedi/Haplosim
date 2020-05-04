@@ -168,8 +168,3 @@ Download:
 The software is available at gitlab, Wageningen UR:
 
 www.bif.wur.nl
-
-Copyright and License:
-=====================
-
-https://git.wur.nl/bioinformatics/pantools/-/blob/master/LICENSE
