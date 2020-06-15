@@ -535,8 +535,9 @@ def rnd_position(seq, rates, model, mean_logs, sd_logs, sample=None):
 			else:
 				rndmupos=list(np.linspace(_starts[0],_ends[0],
 									rates[0]*contig_length))
-				rndmupos+=list(sqrt(0.3/float(rates[0]))*
+				adjust=list(sqrt(0.3/float(rates[0]))*
 					np.random.standard_normal(size = len(rndmupos)))
+				rndmupos=list(x+y for (x,y) in zip(rndmupos, adjust))
 				rndmupos=list(min(max(0,int(round(x))),contig_length-1) for x in rndmupos)
 			if rates[1]<0:
 				raise ValueError("Insertion rate must be >=0 with distance model!")
@@ -547,8 +548,9 @@ def rnd_position(seq, rates, model, mean_logs, sd_logs, sample=None):
 			else:
 				rndinpos=list(np.linspace(_starts[1],_ends[1],
 								rates[1]*contig_length))
-				rndinpos+=list(sqrt(0.3/float(rates[1]))*
+				adjust=list(sqrt(0.3/float(rates[1]))*
 					np.random.standard_normal(size = len(rndinpos)))
+				rndinpos=list(x+y for (x,y) in zip(rndinpos, adjust))
 				rndinpos=list(min(max(0,int(round(x))),contig_length-1) for x in rndinpos)	
 			if rates[2]<0:
 				raise ValueError("Deletion rate must be >=0 with distance model!")
@@ -559,8 +561,9 @@ def rnd_position(seq, rates, model, mean_logs, sd_logs, sample=None):
 			else:
 				rnddelpos=list(np.linspace(_starts[2],_ends[2],
 								rates[2]*contig_length))
-				rnddelpos+=list(sqrt(0.3/float(rates[2]))*
+				adjust=list(sqrt(0.3/float(rates[2]))*
 					np.random.standard_normal(size = len(rnddelpos)))
+				rnddelpos=list(x+y for (x,y) in zip(rnddelpos, adjust))
 				rnddelpos=list(min(max(0,int(round(x))),contig_length-1) for x in rnddelpos)
 		elif model==-1:				# Specify mutation/indel points applying the empirical distribution
 			_rate_for=['Mutation', 'Insertion', 'Deletion']
